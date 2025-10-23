@@ -14,7 +14,7 @@ from utils.system import save_train_config, setup_system
 
 
 # pylint: disable=E1120
-@hydra.main(version_base=None, config_path="config/", config_name="paradis_settings")
+@hydra.main(version_base=None, config_path="config/", config_name="paradis_settings_ensemble")
 def main(cfg: DictConfig):
     """Train the model on ERA5 dataset."""
 

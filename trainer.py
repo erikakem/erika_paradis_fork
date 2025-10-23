@@ -39,6 +39,11 @@ class LitParadis(L.LightningModule):
         lon_grid = datamodule.dataset.lon_rad_grid
         self.model = Paradis(datamodule, cfg, lat_grid, lon_grid)
         self.cfg = cfg
+        # Erika added 
+        self.variational = cfg.ensemble.enable
+        # Erika added 
+        self.beta = cfg.ensemble.get("beta", None)
+
         self.n_inputs = cfg.dataset.n_time_inputs
 
         if self.global_rank == 0:
@@ -208,8 +213,25 @@ class LitParadis(L.LightningModule):
         return torch.sqrt(errors).detach()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+
         """Forward pass through the model."""
-        return self.model(x)
+
+        # If not in variational (ensemble) mode, then we don't need the kl loss! 
+        out = self.model(x)
+
+        if self.variational:
+            # Support multiple possible model outputs:
+            # - tuple: (y, kl)
+            # - tensor: y only (back-compat) -> use kl=0
+            if isinstance(out, tuple):
+                y, kl = out
+            else:
+                y = out
+                kl = torch.tensor(0.0, device=y.device, dtype=y.dtype)  # safe fallback
+            return y, kl
+
+        # non-variational path: preserve prior behavior
+        return out
 
     def configure_optimizers(self):  # type: ignore
         """Configure optimizer and learning rate scheduler."""
@@ -336,11 +358,23 @@ class LitParadis(L.LightningModule):
         train_loss = 0.0
 
         num_steps = input_data.size(1)
-        for step in range(num_steps):
+        for step in range(num_steps): 
             # Forward pass
-            output_data = self(input_data[:, step])
+
+            # Erika added if and else statements 
+            if self.variational:
+                output_data, kl_loss = self(input_data[:, step])
+            else:
+                output_data = self(input_data[:, step])
+            
+            # Erika removed 
+            # output_data = self(input_data[:, step])
 
             loss = self.loss_fn(output_data, true_data[:, step])
+
+            # Erika added 
+            if self.variational:
+                loss += self.beta * kl_loss
 
             # Compute loss (data is already transformed by dataset)
             train_loss += loss
@@ -358,6 +392,17 @@ class LitParadis(L.LightningModule):
             prog_bar=True,
             sync_dist=True,
         )
+
+        # Erika added 
+        if self.variational:
+            self.log(
+                "kl_loss",
+                kl_loss,
+                on_step=True,
+                on_epoch=True,
+                prog_bar=True,
+                sync_dist=True,
+            )
 
         self.log("lr", self.trainer.optimizers[0].param_groups[0]["lr"], prog_bar=True)
 
@@ -384,12 +429,22 @@ class LitParadis(L.LightningModule):
         for step in range(num_steps):
 
             # Forward pass
-            output_data = self(input_data[:, step])
+            # Erika added if and else 
+            if self.variational:
+                output_data, kl_loss = self(input_data[:, step])
+            else:
+                output_data = self(input_data[:, step])
+            # Erika removed 
+            # output_data = self(input_data[:, step])
 
             loss = self.loss_fn(output_data, true_data[:, step])
 
             # Log requested scaled RMSE losses for validation
             report_loss += self._get_report_rmse(output_data, true_data[:, step])
+
+            # Erika added 
+            if self.variational:
+                loss += self.beta * kl_loss
 
             # Compute loss (data is already transformed by dataset)
             val_loss += loss
@@ -413,6 +468,17 @@ class LitParadis(L.LightningModule):
                 name,
                 report_loss[i] / num_steps,
                 on_step=False,
+                on_epoch=True,
+                prog_bar=True,
+                sync_dist=True,
+            )
+
+        # Erika added 
+        if self.variational:
+            self.log(
+                "kl_loss",
+                kl_loss,
+                on_step=True,
                 on_epoch=True,
                 prog_bar=True,
                 sync_dist=True,

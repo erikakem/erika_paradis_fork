@@ -3,17 +3,22 @@
 import torch
 from torch import nn
 
+# Erika added
+from model.variational import VariationalCLP
+
 from model.padding import GeoCyclicPadding
 from model.gmblock import GMBlock
 
 
 class NeuralSemiLagrangian(nn.Module):
     """Implements the semi-Lagrangian advection."""
-
+    print("Neural semi lagrangian")
     def __init__(
         self,
         hidden_dim: int,
         mesh_size: tuple,
+        # Erika added
+        variational: bool,
         num_vels: int,
         lat_grid: torch.Tensor,
         lon_grid: torch.Tensor,
@@ -29,6 +34,9 @@ class NeuralSemiLagrangian(nn.Module):
 
         self.padding_interp = GeoCyclicPadding(self.padding)
         self.hidden_dim = hidden_dim
+
+        # Erika added
+        self.variational = variational
 
         self.num_vels = num_vels
         self.mesh_size = mesh_size
@@ -51,17 +59,46 @@ class NeuralSemiLagrangian(nn.Module):
 
         # Neural network that will learn an effective velocity along the trajectory
         # Output 2 channels per hidden dimension for u and v
-        self.velocity_net = GMBlock(
-            input_dim=hidden_dim,
-            output_dim=2 * num_vels,
-            hidden_dim=hidden_dim,
-            kernel_size=3,
-            mesh_size=mesh_size,
-            layers=["SepConv"],
-            bias_channels=bias_channels,
-            activation=False,
-            pre_normalize=True,
-        )
+        # Erika added: 
+        if variational: 
+            print("Running in ensemble mode")
+        # Erika added: 
+        if not self.variational:
+            self.velocity_net = GMBlock(
+                input_dim=hidden_dim,
+                output_dim=2 * num_vels,
+                hidden_dim=hidden_dim,
+                kernel_size=3,
+                mesh_size=mesh_size,
+                layers=["SepConv"],
+                bias_channels=bias_channels,
+                activation=False,
+                pre_normalize=True,
+            )
+        else:
+            # Erika added 2: Make it compatible with the reshape to (B, 2, num_vels, H, W)
+            self.velocity_net = VariationalCLP(
+                dim_in=hidden_dim,
+                dim_out=2 * num_vels,    # <-- was 2*hidden_dim
+                mesh_size=mesh_size,
+                latent_dim=8,            # as you set in variational.py
+                activation=nn.SiLU,
+                expansion_factor=8,
+            )
+            
+        
+        # Erika Removed: 
+        # self.velocity_net = GMBlock(
+        #     input_dim=hidden_dim,
+        #     output_dim=2 * num_vels,
+        #     hidden_dim=hidden_dim,
+        #     kernel_size=3,
+        #     mesh_size=mesh_size,
+        #     layers=["SepConv"],
+        #     bias_channels=bias_channels,
+        #     activation=False,
+        #     pre_normalize=True,
+        # )
 
         H, W = mesh_size
 
@@ -126,10 +163,18 @@ class NeuralSemiLagrangian(nn.Module):
     ) -> torch.Tensor:
         """Compute advection using rotated coordinate system."""
         batch_size = hidden_features.shape[0]
+        # Erika added
+        kl_loss = torch.tensor(0.0)
         H, W = self.mesh_size
 
         # Get learned velocities for each channel
-        velocities = self.velocity_net(hidden_features)
+        # Erika removed 2: velocities = self.velocity_net(hidden_features)
+
+        # Erika added 
+        if self.variational:
+            velocities, kl_loss = self.velocity_net(hidden_features)
+        else:
+            velocities = self.velocity_net(hidden_features)
 
         # Reshape velocities to separate u,v components per channel
         # [batch, 2*num_vels, lat, lon] -> [batch, 2, num_vels, 2, lat, lon]
@@ -201,7 +246,10 @@ class NeuralSemiLagrangian(nn.Module):
         interpolated = self.up_projection(
             interpolated.reshape(batch_size, self.num_vels, H, W)
         )
-
+        # Erika added
+        if self.variational:
+            return interpolated, kl_loss
+         
         return interpolated
 
 
@@ -220,6 +268,9 @@ class Paradis(nn.Module):
 
         self.num_common_features = datamodule.num_common_features
 
+        # Erika added 
+        self.variational = cfg.ensemble.enable
+ 
         # Get channel sizes
         self.dynamic_channels = datamodule.dataset.num_in_dyn_features
         self.static_channels = datamodule.dataset.num_in_static_features
@@ -269,6 +320,7 @@ class Paradis(nn.Module):
                 NeuralSemiLagrangian(
                     hidden_dim,
                     mesh_size,
+                    variational=self.variational, # Erika added 2: self.variational so that NSL will be able to run variational advection 
                     num_vels=num_vels,
                     lat_grid=lat_grid,
                     lon_grid=lon_grid,
@@ -327,25 +379,78 @@ class Paradis(nn.Module):
         return self.diffusion[i](z) + self.reaction[i](z)
 
     def _step(self, z: torch.Tensor, i: int) -> torch.Tensor:
-        # Lie-Trotter splitting with RK2 on diffusion and reaction layers
-        zadv = self.advection[i](z, self.dt)
+
+        # Erika added 2: Advection
+        if self.variational:
+            zadv, kl_i = self.advection[i](z, self.dt)   # unpack
+        else:
+            zadv = self.advection[i](z, self.dt)
+            kl_i = None
+
+        # Lie–Trotter splitting with RK2 on diffusion+reaction
         k1 = self._DR(zadv, i)
         zmid = zadv + 0.5 * self.dt * k1
         k2 = self._DR(zmid, i)
-        return zadv + self.dt * k2
+        znext = zadv + self.dt * k2
+
+        return (znext, kl_i) if self.variational else znext
+        # Erika removed 2: 
+        # # Lie-Trotter splitting with RK2 on diffusion and reaction layers
+        # zadv = self.advection[i](z, self.dt)
+        # k1 = self._DR(zadv, i)
+        # zmid = zadv + 0.5 * self.dt * k1
+        # k2 = self._DR(zmid, i)
+        # return zadv + self.dt * k2
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # Project features to latent space
+        
         z = self.input_proj(x)
         z0 = z.clone()
 
-        # Compute advection and diffusion-reaction
+        kl_total = 0.0
         for i in range(self.num_layers):
-            z = self._step(z, i)
+            step_out = self._step(z, i)
+            if self.variational:
+                z, kl_i = step_out
+                # Treat None safely (non-variational layers, if any)
+                if kl_i is not None:
+                    kl_total = kl_total + kl_i
+            else:
+                z = step_out
 
-        return x[
+        y = x[
             :,
-            (self.n_inputs - 1)
-            * self.num_common_features : self.n_inputs
-            * self.num_common_features,
+            (self.n_inputs - 1) * self.num_common_features : self.n_inputs * self.num_common_features,
         ] + self.output_proj(z - z0)
+
+        if self.variational:
+            return y, kl_total
+        return y
+
+        # Erika removed 2: old forward function without ensemble capabilities 
+        # # Project features to latent space
+        # z = self.input_proj(x)
+        # z0 = z.clone()
+
+        # kl_total = 0.0
+        # # Compute advection and diffusion-reaction
+        # # for i in range(self.num_layers):
+        # #     z = self._step(z, i)
+
+        # for i in range(self.num_layers):
+        #     step_out = self._step(z, i)
+        #     if self.variational:
+        #         z, kl_i = step_out
+        #         # Treat None safely (non-variational layers, if any)
+        #         if kl_i is not None:
+        #             kl_total = kl_total + kl_i
+        #     else:
+        #         z = step_out
+
+
+        # return x[
+        #     :,
+        #     (self.n_inputs - 1)
+        #     * self.num_common_features : self.n_inputs
+        #     * self.num_common_features,
+        # ] + self.output_proj(z - z0)

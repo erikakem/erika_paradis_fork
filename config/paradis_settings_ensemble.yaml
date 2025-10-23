@@ -11,20 +11,20 @@ model:
   reaction_size: 672               # Latent size for the reaction operator
   adv_interpolation: bicubic       # Choose between bilinear or bicubic
 
+# Erika added 
+ensemble:
+  enable: True                    # Enable ensemble forecasting (uses variational variant)
+  beta: 0.01                       # Beta from beta-vae
+
 # Initialization settings (seeding)
 init:
   seed: 42                         # If not provided, a seed will not be used
   checkpoint_path: null            # Path to model checkpoint for loading pre-trained weights
   restart: false                   # Whether to restart from checkpoint (true) or only load pre-trained weights (false)
 
-# # Erika added 
-# ensemble:
-#   enable: false                    # Enable ensemble forecasting (uses variational variant)
-#   beta: 0.01                       # Beta from beta-vae
-
 # Input dataset
 dataset:
-  root_dir: /path/to/dataset/
+  root_dir:  /home/cap003/hall6/weatherbench_paradis/era5_5.625deg_13level
   time_resolution: 6h              # Dataset original resolution
   n_time_inputs: 2                 # Number inputs (For example, n_time_inputs: 2 feeds [tn-1, tn])
   sampling_interval: 6h            # Sample dataset feeds at this time interval
@@ -54,7 +54,7 @@ forecast:
 
 # Training parameters
 training:
-  max_epochs: -1                   # Maximum number of epochs the training is allowed (-1 to disable and use steps)
+  max_epochs: 3                   # Maximum number of epochs the training is allowed (-1 to disable and use steps)
   max_steps: -1                    # Maximum number of steps to use for training (-1 to disable and use epochs)
   progress_bar: true               # Enable progress bar
   gradient_clip_val: null          # Gradient clipping value, set to null to disable
