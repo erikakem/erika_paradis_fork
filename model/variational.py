@@ -31,7 +31,7 @@ class VariationalCLP(nn.Module):
 
             # Replacement call: 
             GMBlock(
-                layers=['FullConv'],         # <-- one simple block
+                layers=['SepConv'],         # <-- one simple block
                 input_dim=dim_in,
                 output_dim=dim_in,              # preserve channels like before
                 mesh_size=mesh_size,
@@ -88,7 +88,7 @@ class VariationalCLP(nn.Module):
         self.decoder = nn.Sequential(
             nn.Conv2d(latent_dim, dim_in, kernel_size=1),  # project up
              GMBlock(
-                layers=['FullConv'],         # <-- one simple block
+                layers=['SepConv'],         # <-- one simple block
                 input_dim=dim_in,
                 output_dim=dim_in,              # preserve channels like before
                 mesh_size=mesh_size,
