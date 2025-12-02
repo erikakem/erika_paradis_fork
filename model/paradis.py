@@ -382,7 +382,7 @@ class Paradis(nn.Module):
 
         # Erika added 2: Advection
         if self.variational:
-            zadv, kl_i = self.advection[i](z, self.dt)   # unpack
+            zadv, kl_i = self.advection[i](z, self.dt)   
         else:
             zadv = self.advection[i](z, self.dt)
             kl_i = None

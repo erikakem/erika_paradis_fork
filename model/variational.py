@@ -108,7 +108,7 @@ class VariationalCLP(nn.Module):
 
     def forward(self, x, num_samples=1):
         #batch_size = x.shape[0]
-
+       
 
         pre_latent = self.encoder(x)
 
