@@ -1,6 +1,7 @@
 import numpy
 import matplotlib.pyplot as plt
-
+import cartopy.crs as ccrs
+import re 
 
 def plot_error_map(
     date_in,
@@ -123,10 +124,18 @@ def plot_error_map(
     cbar.ax.set_ylabel(clabel, rotation=90)
 
     # Save figure
+    
+    # Get version number from checkpoint path 
+    path = cfg.init.checkpoint_path
+
+    match = re.search(r"version_(\d+)", path)
+    if match:
+        version_num = match.group(1)  
+
     filename = (
-        f"results/{feature}_{level}hPa_prediction_error"
+        f"results/{feature}_{level}_{version_num}_hPa_prediction_error"
         if level
-        else f"results/{feature}_prediction_error"
+        else f"results/{feature}_{version_num}_prediction_error"
     )
     if ind is not None:
         filename += "_" + str(ind)
@@ -186,7 +195,7 @@ def plot_forecast_map(
         clabel = "Geopotential Height [m]"
 
     elif feature == "2m_temperature":
-        cmap = "RdYlBu_r"
+        cmap = "tab20"
         output_plot = output_plot - temp_offset
         true_plot = true_plot - temp_offset
         vmax = numpy.max([numpy.max(output_plot), numpy.max(true_plot)])
@@ -221,18 +230,22 @@ def plot_forecast_map(
         levels = numpy.linspace(vmin, vmax, 100)
         clabel = feature.replace("_", " ").title()
 
+    # Create projection 
+    proj = ccrs.PlateCarree(central_longitude=180)
+
     # Create figure and axes
-    fig, ax = plt.subplots(ncols=2, figsize=(12, 5))
+    fig, ax = plt.subplots(ncols=2, figsize=(12, 5),subplot_kw={"projection": proj},)
+
 
     # Plot contours
     for i, data in enumerate([output_plot, true_plot]):
         if feature == "total_precipitation_6hr":
             contours = ax[i].contourf(
-                longitude, latitude, data, levels=levels, cmap=cmap, extend="max"
+                longitude, latitude, data, levels=levels, cmap=cmap, extend="max", transform=ccrs.PlateCarree()
             )
         else:
             contours = ax[i].contourf(
-                longitude, latitude, data, levels=levels, cmap=cmap
+                longitude, latitude, data, levels=levels, cmap=cmap, transform=ccrs.PlateCarree()
             )
 
         if feature == "geopotential":
@@ -245,7 +258,10 @@ def plot_forecast_map(
                 levels=contour_levels,
                 colors="k",
                 linewidths=0.5,
-            )
+                transform=ccrs.PlateCarree()
+                )
+        # Draw coastlines around continents 
+        ax[i].coastlines(resolution="110m", linewidth=1)
 
     # Set titles
     title = f"{feature} at {level} hPa" if level else feature.replace("_", " ").title()
@@ -261,10 +277,17 @@ def plot_forecast_map(
     cbar.ax.set_ylabel(clabel, rotation=90)
 
     # Save figure
+
+    # Get version number from checkpoint path 
+    path = cfg.init.checkpoint_path
+
+    match = re.search(r"version_(\d+)", path)
+    if match:
+        version_num = match.group(1)  
     filename = (
-        f"results/{feature}_{level}hPa_prediction"
+        f"results/{feature}_{level}_{version_num}_hPa_prediction"
         if level
-        else f"results/{feature}_prediction"
+        else f"results/{feature}_{version_num}_prediction"
     )
     if ind is not None:
         filename += "_" + str(ind)

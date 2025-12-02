@@ -3,6 +3,9 @@
 from datetime import datetime
 import logging
 
+import os 
+import re 
+
 import hydra
 from omegaconf import DictConfig
 import torch
@@ -17,9 +20,10 @@ from utils.postprocessing import (
     replace_variable_name,
 )
 from utils.visualization import plot_forecast_map
+from utils.filesave_functions import extract_resolution, extract_version
 
 
-@hydra.main(version_base=None, config_path="config/", config_name="paradis_settings")
+@hydra.main(version_base=None, config_path="config/", config_name="paradis_settings_ensemble_forecast_1deg")
 def main(cfg: DictConfig):
     """Generate forecasts using a trained model."""
 
@@ -107,7 +111,7 @@ def main(cfg: DictConfig):
 
             frequency_counter = 0
             for step in range(num_forecast_steps):
-                output_data = litmodel(input_data[:, step].to(device))
+                output_data,_ = litmodel(input_data[:, step].to(device))
 
                 input_data = litmodel._autoregression_input_from_output(
                     input_data, output_data, step, num_forecast_steps
@@ -131,9 +135,27 @@ def main(cfg: DictConfig):
             convert_cartesian_to_spherical_winds(
                 dataset.lat, dataset.lon, cfg, output_forecast, output_features
             )
-
+            
             # Save results
             if cfg.forecast.output_file is not None:
+                
+                # Get more information about the parameters 
+                resolution = extract_resolution(cfg.dataset.root_dir)
+                version_num = extract_version(cfg.init.checkpoint_path)
+                
+                # Ensure results are saved in a file with a unique name (put '_1', '_2', etc on the original name)
+                counter = 1
+
+                base_path = f'{cfg.forecast.output_file}_version{version_num}_{resolution}deg'       # <--- keep the clean filename
+                current_path = base_path
+
+                
+                while os.path.exists(current_path):
+                    current_path = f'{base_path}_{counter}'   # <--- use base_path here
+                    print("Output will be saved in: ", current_path)
+                    counter += 1
+                
+                # Then save 
                 save_results_to_zarr(
                     output_forecast,
                     atmospheric_vars,
@@ -141,7 +163,7 @@ def main(cfg: DictConfig):
                     constant_vars,
                     dataset,
                     pressure_levels,
-                    cfg.forecast.output_file,
+                    current_path, # Name of the output file 
                     ind,
                     init_times[time_start_ind : time_start_ind + batch_size],
                 )
@@ -188,6 +210,8 @@ def main(cfg: DictConfig):
                 output_data = output_forecast[time_ind, forecast_ind]
                 true_data = ground_truth[time_ind, forecast_ind]
 
+                
+
                 # Plot geopotential at 500 hPa
                 plot_forecast_map(
                     date_in,
@@ -199,6 +223,7 @@ def main(cfg: DictConfig):
                     cfg,
                     level=500,
                     ind=forecast_ind,
+
                 )
 
                 # Plot 2m temperature with Celsius conversion
@@ -215,16 +240,16 @@ def main(cfg: DictConfig):
                 )
 
                 # Plot precipitations
-                plot_forecast_map(
-                    date_in,
-                    date_out,
-                    output_data,
-                    true_data,
-                    dataset,
-                    "total_precipitation_6hr",
-                    cfg,
-                    ind=forecast_ind,
-                )
+                # plot_forecast_map(
+                #     date_in,
+                #     date_out,
+                #     output_data,
+                #     true_data,
+                #     dataset,
+                #     "total_precipitation_6hr",
+                #     cfg,
+                #     ind=forecast_ind,
+                # )
 
             logging.info("Forecast plots generated successfully")
 
