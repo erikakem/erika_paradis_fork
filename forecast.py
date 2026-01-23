@@ -1,5 +1,6 @@
 """Forecast script for the model."""
 
+import sys
 from datetime import datetime
 import logging
 
@@ -7,9 +8,10 @@ import os
 import re 
 
 import hydra
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 import torch
 from tqdm import tqdm
+import numpy
 
 from trainer import LitParadis
 from data.datamodule import Era5DataModule
@@ -23,10 +25,19 @@ from utils.visualization import plot_forecast_map
 from utils.filesave_functions import extract_resolution, extract_version
 
 
-@hydra.main(version_base=None, config_path="config/", config_name="paradis_settings_ensemble_forecast_1deg")
-def main(cfg: DictConfig):
-    """Generate forecasts using a trained model."""
+def main():
+    """Generate forecasts using a trained model.
+    Usage: python forecast.py path/to/config_file.yaml
+    """
 
+    cfg = OmegaConf.load(sys.argv[1])
+
+    """
+    Core forecast execution logic.
+
+    Args:
+        cfg: Fully configured DictConfig with all necessary parameters set
+    """
     # Set device
     device = torch.device(
         "cuda"
@@ -57,8 +68,6 @@ def main(cfg: DictConfig):
 
     output_features = list(dataset.dyn_output_features)
 
-    n_inputs = cfg.dataset.n_time_inputs
-
     # Load model
     litmodel = LitParadis(datamodule, cfg)
     if not cfg.init.checkpoint_path:
@@ -87,14 +96,18 @@ def main(cfg: DictConfig):
     )
 
     # Compute initialization times from dataset
-    init_times = dataset.time[n_inputs - 1 :: dataset.interval_steps]
+    init_times = dataset.time
+
+    logging.info(f"Number of forecasts to generate: {len(init_times)}")
 
     # Run forecast
     logging.info("Generating forecast...")
     ind = 0
     with torch.inference_mode(), torch.no_grad():
         time_start_ind = 0
-        for input_data, ground_truth in tqdm(datamodule.predict_dataloader()):
+        for input_data, ground_truth in tqdm(
+            datamodule.predict_dataloader()
+        ):
 
             batch_size = input_data.shape[0]
 
@@ -110,8 +123,11 @@ def main(cfg: DictConfig):
             )
 
             frequency_counter = 0
+
             for step in range(num_forecast_steps):
-                output_data,_ = litmodel(input_data[:, step].to(device))
+                output_data = litmodel(
+                    input_data[:, step].to(device),
+                )
 
                 input_data = litmodel._autoregression_input_from_output(
                     input_data, output_data, step, num_forecast_steps
@@ -132,6 +148,10 @@ def main(cfg: DictConfig):
             output_forecast = output_forecast.numpy()
 
             # Post-process cartesian winds to spherical
+            convert_cartesian_to_spherical_winds(
+                dataset.lat, dataset.lon, cfg, ground_truth, output_features
+            )
+
             convert_cartesian_to_spherical_winds(
                 dataset.lat, dataset.lon, cfg, output_forecast, output_features
             )
@@ -158,6 +178,7 @@ def main(cfg: DictConfig):
                 # Then save 
                 save_results_to_zarr(
                     output_forecast,
+                    dataset.ds_loader,
                     atmospheric_vars,
                     surface_vars,
                     constant_vars,
