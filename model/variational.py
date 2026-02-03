@@ -2,7 +2,7 @@ import torch
 from torch import nn
 
 from model.padding import GeoCyclicPadding
-from model.gmblock import GMBlock
+from model.blocks import GMBlock
 
 
 # CLP processor with structured latent

@@ -114,6 +114,23 @@ class Paradis(nn.Module):
             ]
         )
 
+        # Erika added: initialize advection perturbation method 
+
+        self.advection_perturbation = nn.ModuleList(
+            [
+                VariationalCLP(
+                    dim_in=hidden_dim,
+                    dim_out=hidden_dim,
+                    mesh_size=mesh_size,
+                    kernel_size=3,
+                    latent_dim=8,  # tune this
+                    activation=nn.SiLU,
+                    expansion_factor=8,
+                )
+                for _ in range(self.num_layers)
+            ]
+        )
+
         self.diffusion = nn.ModuleList(
             [
                 GMBlock(
@@ -185,9 +202,17 @@ class Paradis(nn.Module):
             u = velocities[:, 0]
             v = velocities[:, 1]
 
-            # Apply SL advection, reaction and diffusion blocks
-            advected = self.advection[i](hidden, u, v, self.dt)
-            hidden = hidden + advected
+            
+            if self.cfg.ensemble.enable_test: 
+                # Initialize advection 
+                advected = self.advection[i](hidden, u, v, self.dt)
+                # Add variational perturbation
+                perturbed_advected, kl_loss = self.advection_perturbation[i](advected)
+                hidden = hidden + perturbed_advected
+            else: 
+                # Apply SL advection, reaction and diffusion blocks
+                advected = self.advection[i](hidden, u, v, self.dt)
+                hidden = hidden + advected
 
             diffused = self.diffusion[i](hidden)
             hidden = hidden + diffused
